@@ -1,6 +1,6 @@
 from functools import partial
 
-from PySide6.QtCore import Qt
+from PySide6.QtCore import Qt, QTimer
 from PySide6.QtGui import QCursor
 from PySide6.QtWidgets import QListWidgetItem, QMenu, QApplication,QListView
 
@@ -137,7 +137,6 @@ class ComicListWidget(BaseListWidget):
         """
         super().showEvent(event)
         # 延迟触发，确保布局完成
-        from PySide6.QtCore import QTimer
         QTimer.singleShot(100, self._trigger_visible_loads)
 
     def SelectMenuBook(self, pos):

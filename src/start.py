@@ -188,6 +188,9 @@ if __name__ == "__main__":
         Log.Info("[Startup] ✅ Application started in {:.2f}s (UI ready, Waifu2x loading in background)".format(startup_elapsed))
     except Exception as es:
         Log.Error(es)
+        # 🔧 修复：异常时关闭splash screen
+        if splash:
+            splash.close()
         showError(traceback.format_exc(), app)
         if config.CanWaifu2x:
             sr.stop()
