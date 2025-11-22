@@ -16,6 +16,8 @@ from task.task_local import LocalData
 from tools.book import BookMgr
 from tools.str import Str
 from tools.tool import time_me, ToolUtil
+from tools.image_cache import get_image_cache
+from tools.pixmap_cache import get_pixmap_cache
 from view.download.download_item import DownloadItem, DownloadEpsItem
 from view.read.read_enum import ReadMode, QtFileData
 from view.read.read_frame import ReadFrame
@@ -66,6 +68,11 @@ class ReadView(QtWidgets.QWidget, QtTaskBase):
         self.isLocal = False
         self._cacheBook = None
         self.lastPath = ""
+
+        # 🚀 性能监控统计
+        self.perf_page_load_count = 0  # 页面加载计数
+        self.perf_last_report_index = 0  # 上次报告的页面索引
+
         # QtOwner().owner.WindowsSizeChange.connect(self.qtTool.ClearQImage)
 
     @property
@@ -321,9 +328,21 @@ class ReadView(QtWidgets.QWidget, QtTaskBase):
         preLoadList = list(range(self.curIndex, self.curIndex + config.PreLoading))
         preQImage = list(range(self.curIndex, self.curIndex + config.PreLook))
 
-        # 预加载上一页
-        if len(preLoadList) >= 2 and self.curIndex > 0:
-            preLoadList.insert(2, self.curIndex - 1)
+        # 🚀 优化：优先级预加载列表（当前页 > 下一页 > 上一页 > 后续页）
+        priorityLoadList = []
+        if self.curIndex < self.maxPic:
+            priorityLoadList.append(self.curIndex)  # Priority 0: 当前页
+        if self.curIndex + 1 < self.maxPic:
+            priorityLoadList.append(self.curIndex + 1)  # Priority 1: 下一页
+        if self.curIndex > 0:
+            priorityLoadList.append(self.curIndex - 1)  # Priority 2: 上一页
+        # 添加后续页（2-10页）
+        for offset in range(2, config.PreLoading):
+            if self.curIndex + offset < self.maxPic:
+                priorityLoadList.append(self.curIndex + offset)
+
+        # 合并到preLoadList（保持兼容性）
+        preLoadList = list(dict.fromkeys(priorityLoadList))  # 去重并保持顺序
 
         for i, p in self.pictureData.items():
             if i in preLoadList:
@@ -341,31 +360,54 @@ class ReadView(QtWidgets.QWidget, QtTaskBase):
         if not self.bookId:
             return
 
-        for i in preLoadList:
+        # 🚀 优化1: 并发下载（不要break，启动多个下载任务）
+        concurrent_downloads = 0
+        downloading_count = sum(1 for p in self.pictureData.values()
+                              if p.state == p.Downloading or p.state == p.DownloadReset)
+
+        for i in priorityLoadList:
             if i >= self.maxPic or i < 0:
                 continue
+
+            # 检查是否已达到并发上限
+            if concurrent_downloads + downloading_count >= config.ConcurrentDownloads:
+                break
 
             p = self.pictureData.get(i)
             if not p:
                 self.AddDownload(i)
-                break
+                concurrent_downloads += 1
+                # ✅ 继续下载下一张，不要break！
             elif p.state == p.Downloading or p.state == p.DownloadReset:
-                break
+                # 已在下载中，跳过
+                continue
 
-        for i in preLoadList:
+        # 🚀 优化2: 并发Waifu2x处理（使用优先级队列）
+        concurrent_waifu2x = 0
+        processing_count = sum(1 for p in self.pictureData.values()
+                             if p.waifuState == p.WaifuStateStart)
+
+        for i in priorityLoadList:
             if i >= self.maxPic or i < 0:
                 continue
+
+            # 检查是否已达到并发上限
+            if concurrent_waifu2x + processing_count >= config.ConcurrentWaifu2x:
+                break
+
             p = self.pictureData.get(i)
             if not p or not p.data:
-                break
+                continue  # 数据未下载，跳过
             if not p.isWaifu2x:
-                continue
+                continue  # 未启用Waifu2x，跳过
             if p.waifuState == p.WaifuStateCancle or p.waifuState == p.WaifuWait:
                 p.waifuState = p.WaifuStateStart
                 self.AddCovertData(i)
-                break
-            if p.waifuState == p.WaifuStateStart:
-                break
+                concurrent_waifu2x += 1
+                # ✅ 继续处理下一张，不要break！
+            elif p.waifuState == p.WaifuStateStart:
+                # 已在处理中，跳过
+                continue
 
         for i in preQImage:
             p = self.pictureData.get(i)
@@ -391,6 +433,21 @@ class ReadView(QtWidgets.QWidget, QtTaskBase):
                 p.cacheWaifu2xImageTaskId = 0
             p.cacheImage = None
             p.cacheWaifu2xImage = None
+
+        # 🚀 性能监控：每10页输出一次统计
+        self.perf_page_load_count += 1
+        if self.perf_page_load_count % 10 == 0:
+            image_cache = get_image_cache()
+            pixmap_cache = get_pixmap_cache()
+            img_stats = image_cache.get_stats()
+            pix_stats = pixmap_cache.get_stats()
+
+            Log.Info(f"[Performance] === Page {self.curIndex} / {self.maxPic} ===")
+            Log.Info(f"[Performance] ImageCache: hits={img_stats['hits']}, misses={img_stats['misses']}, hit_rate={img_stats['hit_rate']:.1f}%")
+            Log.Info(f"[Performance] PixmapCache: hits={pix_stats['hits']}, misses={pix_stats['misses']}, hit_rate={pix_stats['hit_rate']:.1f}%")
+            Log.Info(f"[Performance] Concurrent Downloads: {concurrent_downloads}, Concurrent Waifu2x: {concurrent_waifu2x}")
+            Log.Info(f"[Performance] Preload Pages: {len(preLoadList)}, Priority Order: {priorityLoadList[:5]}")
+
         pass
 
     def StartLoadPicUrlBack(self, raw, v):
@@ -461,6 +518,13 @@ class ReadView(QtWidgets.QWidget, QtTaskBase):
             self.AddDownload(index)
         else:
             p.SetData(data, self.category)
+
+            # 🚀 优化：下载成功后存入ImageCache
+            cache_key = f"{self.bookId}_{self.epsId}_{index}"
+            image_cache = get_image_cache()
+            image_cache.put(cache_key, data)
+            Log.Info(f"[ImageCache] Cached page {index}, book {self.bookId}, eps {self.epsId}")
+
             # self.CheckToQImage()
             self.CheckLoadPicture()
         self.CheckSetProcess()
@@ -470,6 +534,22 @@ class ReadView(QtWidgets.QWidget, QtTaskBase):
         model = self.qtTool.stripModel
         toW, toH = QtFileData.GetReadScale(self.qtTool.stripModel, 0, self.scrollArea.width(),
                                            self.scrollArea.height(), True)
+
+        # 🚀 优化：先检查PixmapCache，避免重复解码
+        cache_key = f"{self.bookId}_{self.epsId}_{index}_{'waifu2x' if isWaifu2x else 'normal'}"
+        pixmap_cache = get_pixmap_cache()
+        cached_qimage = pixmap_cache.get(cache_key)
+
+        if cached_qimage is not None:
+            # ✅ PixmapCache命中！直接使用缓存的QImage
+            Log.Info(f"[PixmapCache] Cache hit for page {index}, waifu2x={isWaifu2x}")
+            if not isWaifu2x:
+                self.ConvertQImageBack(cached_qimage, index)
+            else:
+                self.ConvertQImageWaifu2xBack(cached_qimage, index)
+            return
+
+        # 缓存未命中，进行正常解码
         if not isWaifu2x:
             if p.data:
                 p.cacheImage = None
@@ -489,6 +569,13 @@ class ReadView(QtWidgets.QWidget, QtTaskBase):
         assert isinstance(p, QtFileData)
         p.cacheImage = data
         p.cacheImageTaskId = 0
+
+        # 🚀 优化：解码完成后存入PixmapCache
+        cache_key = f"{self.bookId}_{self.epsId}_{index}_normal"
+        pixmap_cache = get_pixmap_cache()
+        pixmap_cache.put(cache_key, data)
+        Log.Info(f"[PixmapCache] Cached QImage for page {index}, waifu2x=False")
+
         if index == self.curIndex:
             self.ShowImg(index)
         elif self.stripModel in [ReadMode.UpDown, ReadMode.RightLeftScroll,
@@ -793,6 +880,13 @@ class ReadView(QtWidgets.QWidget, QtTaskBase):
 
         p.cacheWaifu2xImage = data
         p.cacheWaifu2xImageTaskId = 0
+
+        # 🚀 优化：Waifu2x解码完成后存入PixmapCache
+        cache_key = f"{self.bookId}_{self.epsId}_{index}_waifu2x"
+        pixmap_cache = get_pixmap_cache()
+        pixmap_cache.put(cache_key, data)
+        Log.Info(f"[PixmapCache] Cached Waifu2x QImage for page {index}")
+
         if index == self.curIndex:
             self.ShowImg(index)
         elif self.stripModel in [ReadMode.UpDown, ReadMode.RightLeftScroll,
@@ -840,6 +934,18 @@ class ReadView(QtWidgets.QWidget, QtTaskBase):
                 self.StartLoadPicUrlBack(raw, "")
 
     def AddDownload(self, i):
+        # 🚀 优化：先检查ImageCache，避免重复下载
+        cache_key = f"{self.bookId}_{self.epsId}_{i}"
+        image_cache = get_image_cache()
+        cached_data = image_cache.get(cache_key)
+
+        if cached_data:
+            # ✅ 缓存命中！直接使用缓存数据
+            Log.Info(f"[ImageCache] Cache hit for page {i}, book {self.bookId}, eps {self.epsId}")
+            self.CompleteDownloadPic(cached_data, Status.Ok, i)
+            return
+
+        # 缓存未命中，进行正常下载
         loadPath = QtOwner().downloadView.GetDownloadFilePath(self.bookId, self.epsId, i)
         if self.isLocal:
             assert isinstance(self.cacheBook, LocalData)
