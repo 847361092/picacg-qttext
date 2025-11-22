@@ -4,11 +4,9 @@
 实现LRU缓存策略，显著提升图片加载性能
 """
 
-import os
 import threading
-import time
 from collections import OrderedDict
-from typing import Optional, Tuple
+from typing import Optional
 from tools.log import Log
 
 
