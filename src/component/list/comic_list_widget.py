@@ -35,6 +35,111 @@ class ComicListWidget(BaseListWidget):
         self.isMoveMenu = False
         self.openMenu = False
 
+        # 🚀 优化：智能封面加载 - 优先加载可见区域
+        self._pending_loads = set()  # 待加载的索引
+        self._loading_items = set()  # 正在加载的索引
+        self._buffer_size = 10  # 缓冲区大小（可见区域前后N个item）
+
+        # 连接滚动事件
+        self.verticalScrollBar().valueChanged.connect(self._on_scroll_changed)
+
+    def _get_visible_indices(self):
+        """
+        获取当前可见的item索引
+
+        优化说明：
+        - 只加载可见区域的封面，避免浪费带宽
+        - 改善首屏加载速度
+        """
+        visible_indices = []
+        viewport_rect = self.viewport().rect()
+
+        for i in range(self.count()):
+            item = self.item(i)
+            if not item:
+                continue
+
+            item_rect = self.visualItemRect(item)
+            # 检查item是否与viewport相交（即可见）
+            if viewport_rect.intersects(item_rect):
+                visible_indices.append(i)
+
+        return visible_indices
+
+    def _get_priority_indices(self):
+        """
+        获取优先加载的索引（可见区域 + 缓冲区）
+
+        优化说明：
+        - 可见区域：立即加载（用户正在看）
+        - 缓冲区：预加载（用户可能即将看到）
+        - 其他：暂不加载（等滚动到附近时再加载）
+        """
+        visible_indices = self._get_visible_indices()
+        priority_indices = set(visible_indices)
+
+        # 添加缓冲区（可见item前后N个）
+        for idx in visible_indices:
+            for offset in range(-self._buffer_size, self._buffer_size + 1):
+                buffer_idx = idx + offset
+                if 0 <= buffer_idx < self.count():
+                    priority_indices.add(buffer_idx)
+
+        return priority_indices
+
+    def _on_scroll_changed(self):
+        """
+        滚动事件处理
+
+        优化说明：
+        - 滚动时触发可见item的加载
+        - 避免paintEvent的无序加载（按绘制顺序）
+        - 改为有序加载（按可见优先级）
+        """
+        self._trigger_visible_loads()
+
+    def _trigger_visible_loads(self):
+        """
+        触发可见区域的封面加载
+
+        优化说明：
+        - 主动触发加载，而不是等待paintEvent
+        - 优先加载可见item，提升首屏速度
+        """
+        priority_indices = self._get_priority_indices()
+
+        # 遍历优先索引，触发未加载的item
+        for index in sorted(priority_indices):  # 排序保证从上到下加载
+            if index in self._loading_items:
+                continue  # 已在加载中
+
+            item = self.item(index)
+            if not item:
+                continue
+
+            widget = self.itemWidget(item)
+            if not isinstance(widget, ComicItemWidget):
+                continue
+
+            # 检查是否需要加载
+            if not widget.isLoadPicture and widget.url and config.IsLoadingPicture:
+                widget.isLoadPicture = True
+                self._loading_items.add(index)
+                self.LoadingPicture(index)
+
+    def showEvent(self, event):
+        """
+        Widget显示事件
+
+        优化说明：
+        - 列表首次显示时，立即加载首屏封面
+        - 避免等待用户滚动或paintEvent触发
+        """
+        super().showEvent(event)
+        # 延迟触发，确保布局完成
+        from PySide6.QtCore import QTimer
+        QTimer.singleShot(100, self._trigger_visible_loads)
+
     def SelectMenuBook(self, pos):
         index = self.indexAt(pos)
         widget = self.indexWidget(index)
@@ -258,6 +363,9 @@ class ComicListWidget(BaseListWidget):
         self.AddDownloadTask(widget.url, widget.path, completeCallBack=self.LoadingPictureComplete, backParam=index)
 
     def LoadingPictureComplete(self, data, status, index):
+        # 🚀 优化：标记加载完成，允许重试或后续操作
+        self._loading_items.discard(index)
+
         if status == Status.Ok:
             item = self.item(index)
             widget = self.itemWidget(item)
