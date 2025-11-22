@@ -136,6 +136,21 @@ class TestPixmapCacheIntegration(unittest.TestCase):
 
         self.assertTrue(True)
 
+    def test_bytes_type_check(self):
+        """测试bytes类型检查"""
+        # 模拟SetPicture的类型检查逻辑
+        test_cases = [
+            ("", False),  # 空字符串
+            (None, False),  # None
+            (b"", False),  # 空bytes
+            (b"data", True),  # 有效bytes
+            (123, False),  # 数字
+        ]
+
+        for data, expected in test_cases:
+            result = data and isinstance(data, bytes) and len(data) > 0
+            self.assertEqual(result, expected, f"Failed for data={data}")
+
     def test_decode_failure_handling(self):
         """测试解码失败处理"""
         # 损坏的图片数据

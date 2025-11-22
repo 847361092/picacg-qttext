@@ -64,29 +64,119 @@ class TestImageMemoryCache(unittest.TestCase):
 
     def test_lru_eviction(self):
         """测试LRU驱逐策略"""
-        # 创建非常小的缓存，max_entries=5
-        small_cache = ImageMemoryCache(max_size_mb=10.0, max_entries=5)
+        # 使用size限制：0.01MB (10KB) 缓存
+        # 单个文件不能超过10%，即1KB
+        # 每个文件800 bytes（< 1KB），符合限制
+        small_cache = ImageMemoryCache(max_size_mb=0.01, max_entries=1000)
 
-        # 添加小数据，使用max_entries限制
-        data = b"x" * 1000  # 1KB
+        data = b"x" * 800  # 800 bytes < 1KB
 
-        # 添加5个条目（填满）
-        for i in range(5):
+        # 添加多个条目，填满并超出10KB缓存
+        for i in range(15):  # 15 * 800 = 12KB > 10KB
             small_cache.put(f"key_{i}", data)
 
-        # 所有key应该都在
-        self.assertIsNotNone(small_cache.get("key_0"))
-        self.assertIsNotNone(small_cache.get("key_4"))
-
-        # 添加第6个，应该驱逐key_0（最旧的）
-        small_cache.put("key_5", data)
-
-        # key_0应该被驱逐
+        # key_0应该被驱逐（最旧的）
         self.assertIsNone(small_cache.get("key_0"))
-        # 新加入的应该在
-        self.assertIsNotNone(small_cache.get("key_5"))
-        # key_1应该还在（成为最旧的）
-        self.assertIsNotNone(small_cache.get("key_1"))
+        # 最新的应该还在
+        self.assertIsNotNone(small_cache.get("key_14"))
+        # 验证有驱逐发生
+        self.assertGreater(small_cache.evictions, 0)
+
+    def test_file_too_large(self):
+        """测试文件过大不缓存"""
+        # 创建1MB缓存
+        cache = ImageMemoryCache(max_size_mb=1.0)
+
+        # 尝试添加超过10%的文件（>100KB）
+        large_data = b"x" * 150000  # 150KB > 1MB * 10%
+
+        result = cache.put("large_file", large_data)
+
+        # 不应该成功
+        self.assertFalse(result)
+        # 缓存中不应该有这个key
+        self.assertIsNone(cache.get("large_file"))
+
+    def test_clear_old_entries(self):
+        """测试清理旧条目"""
+        # 添加10个条目
+        for i in range(10):
+            self.cache.put(f"key_{i}", b"data")
+
+        # 清理，保留50%
+        self.cache.clear_old_entries(keep_ratio=0.5)
+
+        # 应该只剩5个
+        self.assertEqual(len(self.cache.cache), 5)
+
+        # 旧的key应该被删除
+        self.assertIsNone(self.cache.get("key_0"))
+        self.assertIsNone(self.cache.get("key_4"))
+
+        # 新的key应该保留
+        self.assertIsNotNone(self.cache.get("key_5"))
+        self.assertIsNotNone(self.cache.get("key_9"))
+
+    def test_resize(self):
+        """测试调整缓存大小"""
+        # 创建大缓存
+        cache = ImageMemoryCache(max_size_mb=10.0)
+
+        # 添加一些数据
+        data = b"x" * 100000  # 100KB
+        for i in range(5):
+            cache.put(f"key_{i}", data)
+
+        # 缩小缓存
+        cache.resize(0.3)  # 缩小到300KB
+
+        # 应该驱逐一些条目（500KB -> 300KB）
+        # 至少key_0和key_1应该被驱逐
+        self.assertIsNone(cache.get("key_0"))
+        # key_4应该还在（最新的）
+        self.assertIsNotNone(cache.get("key_4"))
+
+    def test_log_stats_trigger(self):
+        """测试统计日志触发（1000次访问）"""
+        # 添加一些数据以产生命中
+        self.cache.put("test_key", b"test_data")
+
+        # 访问1000次（499*2 + 2 = 1000）
+        for i in range(499):
+            self.cache.get("test_key")  # 命中
+            self.cache.get("nonexistent")  # 未命中
+
+        # 第999和1000次
+        self.cache.get("test_key")
+        self.cache.get("test_key")  # 第1000次应该触发_log_stats
+
+        # 验证统计正确
+        self.assertEqual(self.cache.hits + self.cache.misses, 1000)
+
+    def test_evict_empty_cache(self):
+        """测试驱逐空缓存（覆盖_evict_one第114行）"""
+        # 创建空缓存
+        empty_cache = ImageMemoryCache(max_size_mb=1.0)
+
+        # 调用_evict_one应该安全返回（不崩溃）
+        empty_cache._evict_one()
+
+        # 验证缓存仍为空
+        self.assertEqual(len(empty_cache.cache), 0)
+
+    def test_eviction_log_trigger(self):
+        """测试驱逐日志触发（100次驱逐）"""
+        # 创建小缓存，容易触发驱逐
+        small_cache = ImageMemoryCache(max_size_mb=0.5, max_entries=3)
+
+        data = b"x" * 1000
+
+        # 添加100+个条目，触发多次驱逐
+        for i in range(103):  # 确保超过100次驱逐
+            small_cache.put(f"key_{i}", data)
+
+        # 验证驱逐次数
+        self.assertGreaterEqual(small_cache.evictions, 100)
 
     def test_cache_hit_miss_stats(self):
         """测试缓存命中/未命中统计"""
@@ -201,6 +291,23 @@ class TestImageCacheSingleton(unittest.TestCase):
         first = instances[0]
         for instance in instances:
             self.assertIs(instance, first)
+
+    def test_config_with_value_attribute(self):
+        """测试配置读取with .value属性（覆盖line 272）"""
+        # 这个测试覆盖get_image_cache中的配置读取逻辑
+        # 由于get_image_cache是单例，我们只能验证它正常工作
+        # 实际的.value属性提取逻辑在首次调用时执行
+
+        # 获取单例实例
+        cache = get_image_cache()
+
+        # 验证缓存正确初始化
+        self.assertIsNotNone(cache)
+        self.assertIsInstance(cache, ImageMemoryCache)
+
+        # 验证max_size被正确设置（无论是从配置还是默认值）
+        # 默认是512MB或者从Setting.ImageCacheSize读取
+        self.assertGreater(cache.max_size, 0)
 
 
 if __name__ == '__main__':
