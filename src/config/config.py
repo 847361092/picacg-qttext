@@ -26,8 +26,14 @@ ResetCnt = 5                   # 下载重试次数
 IsUseCache = True              # 是否使用cache
 CachePathDir = "cache"         # cache目录
 # CacheExpired = 24 * 60 * 60  # cache过期时间24小时
-PreLoading = 10                # 预加载5页
-PreLook = 4                    # 预显示
+PreLoading = 10                # 预加载10页
+PreLook = 4                    # 预显示4页
+
+# 并发优化配置
+ConcurrentDownloads = 3        # 并发下载页数（同时下载2-3页）
+ConcurrentWaifu2x = 2          # 并发Waifu2x处理数（同时处理2页）
+SmartPredict = True            # 智能方向预测（根据翻页历史调整预读）
+PredictHistorySize = 10        # 方向预测历史记录数
 
 IsLoadingPicture = True
 
