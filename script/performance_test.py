@@ -139,13 +139,26 @@ def test_database_performance():
     try:
         import sqlite3
 
-        # 检查数据库索引
-        db_path = "../src/db/book.db"
-        if not os.path.exists(db_path):
-            db_path = "db/book.db"
+        # 检查数据库索引（鲁棒的路径查找）
+        script_dir = os.path.dirname(os.path.abspath(__file__))
+        project_root = os.path.dirname(script_dir)
 
-        if not os.path.exists(db_path):
+        # 尝试多个可能的路径
+        possible_paths = [
+            os.path.join(project_root, "src", "db", "book.db"),  # 从项目根目录
+            os.path.join(script_dir, "..", "src", "db", "book.db"),  # 相对script目录
+            "db/book.db",  # 当前目录（src/内运行）
+        ]
+
+        db_path = None
+        for path in possible_paths:
+            if os.path.exists(path):
+                db_path = path
+                break
+
+        if db_path is None:
             print("  ⊙ 数据库文件不存在，跳过测试")
+            print(f"  尝试过的路径: {possible_paths}")
             return {'status': 'db_not_found'}
 
         conn = sqlite3.connect(db_path)
