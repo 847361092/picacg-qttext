@@ -20,56 +20,54 @@ if sys.platform == 'darwin':
     current_dir = os.path.abspath(os.path.dirname(current_path) + os.path.sep + '.')
     os.chdir(current_dir)
 
-# 🚀 优化：Waifu2x延迟加载（不阻塞启动）
-config.CanWaifu2x = False  # 先假设不可用，后台加载后更新
-config.CloseWaifu2x = False
-sr = None  # 全局sr对象，延迟初始化
+# 🚀 优化：Waifu2x延迟加载（只延迟模型，不延迟sr模块）
+# 🔧 修复：先同步检查sr模块是否可用，避免sr=None导致的错误
+try:
+    from sr_vulkan import sr_vulkan as sr
+    config.CanWaifu2x = True
+    config.CloseWaifu2x = False
+except ModuleNotFoundError as es:
+    sr = None
+    config.CanWaifu2x = False
+    config.CloseWaifu2x = True
+    if hasattr(es, "msg"):
+        config.ErrorMsg = es.msg
+except Exception as es:
+    sr = None
+    config.CanWaifu2x = False
+    if hasattr(es, "msg"):
+        config.ErrorMsg = es.msg
 
-def lazy_init_waifu2x():
+def lazy_load_waifu2x_models():
     """
-    延迟初始化Waifu2x（在后台线程进行）
+    延迟加载Waifu2x模型文件（在后台线程进行）
 
     优化说明：
-    - Waifu2x模型加载耗时1-2秒，严重影响启动速度
+    - sr模块导入很快，立即同步导入（避免sr=None错误）
+    - 模型文件加载慢（1-2秒），后台加载不阻塞启动
     - 用户通常不会立即使用Waifu2x功能
-    - 后台加载不阻塞UI显示，改善启动体验
     """
-    global config, sr
-    import threading
+    if not config.CanWaifu2x:
+        return  # sr模块不可用，无需加载模型
 
     start_time = time.time()
-    Log.Info("[Startup] Waifu2x initialization started in background...")
+    Log.Info("[Startup] Waifu2x models loading started in background...")
 
     try:
-        from sr_vulkan import sr_vulkan as sr_module
-        sr = sr_module
-        config.CanWaifu2x = True
-
-        # 加载模型（耗时操作）
-        try:
-            import sr_vulkan_model_waifu2x
-            Log.Info("[Startup] Loaded sr_vulkan_model_waifu2x: {}".format(sr_vulkan_model_waifu2x))
-            import sr_vulkan_model_realcugan
-            Log.Info("[Startup] Loaded sr_vulkan_model_realcugan: {}".format(sr_vulkan_model_realcugan))
-            import sr_vulkan_model_realesrgan
-            Log.Info("[Startup] Loaded sr_vulkan_model_realesrgan: {}".format(sr_vulkan_model_realesrgan))
-        except Exception as model_error:
-            Log.Warn("[Startup] Waifu2x model loading error: {}".format(model_error))
+        # 加载模型文件（耗时操作）
+        import sr_vulkan_model_waifu2x
+        Log.Info("[Startup] Loaded sr_vulkan_model_waifu2x")
+        import sr_vulkan_model_realcugan
+        Log.Info("[Startup] Loaded sr_vulkan_model_realcugan")
+        import sr_vulkan_model_realesrgan
+        Log.Info("[Startup] Loaded sr_vulkan_model_realesrgan")
 
         elapsed = time.time() - start_time
-        Log.Info("[Startup] ✅ Waifu2x initialized in {:.2f}s (background)".format(elapsed))
+        Log.Info("[Startup] ✅ Waifu2x models loaded in {:.2f}s (background)".format(elapsed))
 
-    except ModuleNotFoundError as es:
-        config.CanWaifu2x = False
-        config.CloseWaifu2x = True
-        if hasattr(es, "msg"):
-            config.ErrorMsg = es.msg
-        Log.Warn("[Startup] Waifu2x not available: ModuleNotFoundError")
-    except Exception as es:
-        config.CanWaifu2x = False
-        if hasattr(es, "msg"):
-            config.ErrorMsg = es.msg
-        Log.Error("[Startup] Waifu2x initialization error: {}".format(es))
+    except Exception as model_error:
+        Log.Warn("[Startup] Waifu2x model loading error: {}".format(model_error))
+        # 注意：即使模型加载失败，sr模块仍然可用
 
 
 from PySide6.QtGui import QFont, QPixmap, QPainter, QColor
@@ -173,9 +171,9 @@ if __name__ == "__main__":
         main.Init()
         localServer.newConnection.connect(main.OnNewConnection)
 
-        # 🚀 优化：启动后台线程加载Waifu2x（不阻塞UI）
+        # 🚀 优化：启动后台线程加载Waifu2x模型（不阻塞UI）
         import threading
-        waifu2x_thread = threading.Thread(target=lazy_init_waifu2x, daemon=True, name="Waifu2xLoader")
+        waifu2x_thread = threading.Thread(target=lazy_load_waifu2x_models, daemon=True, name="Waifu2xLoader")
         waifu2x_thread.start()
 
         # 关闭splash screen
