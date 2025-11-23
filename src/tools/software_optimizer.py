@@ -84,10 +84,13 @@ class SoftwareOptimizer:
                     # 提高优先级（-10就够了，不用-20）
                     os.nice(-10)
                     Log.Info("[SoftwareOptimizer] 进程优先级: -10 ⚡")
-                except PermissionError:
-                    # 普通用户，尽量提高
-                    os.nice(-5)
-                    Log.Info("[SoftwareOptimizer] 进程优先级: -5 ⚡")
+                except (PermissionError, OSError) as e:
+                    # 普通用户或权限不足，尽量提高
+                    try:
+                        os.nice(-5)
+                        Log.Info("[SoftwareOptimizer] 进程优先级: -5 ⚡")
+                    except (PermissionError, OSError):
+                        Log.Debug(f"[SoftwareOptimizer] 无法提升优先级: {e}")
 
         except Exception as e:
             Log.Debug(f"[SoftwareOptimizer] 优先级设置失败: {e}")
@@ -138,18 +141,20 @@ class SoftwareOptimizer:
                 capture_output=True, text=True, timeout=2
             )
 
-            if result.returncode == 0:
-                vram_mb = int(result.stdout.strip().split('\n')[0])
-                vram_gb = vram_mb / 1024
+            if result.returncode == 0 and result.stdout.strip():
+                lines = result.stdout.strip().split('\n')
+                if lines and lines[0]:
+                    vram_mb = int(lines[0])
+                    vram_gb = vram_mb / 1024
 
-                if vram_gb >= 16:
-                    tile_size = 2048
-                    Log.Info(f"[SoftwareOptimizer] Tile Size: {tile_size} (检测到{vram_gb:.1f}GB显存) ⚡")
-                    return tile_size
-                elif vram_gb >= 8:
-                    return 1024
-                elif vram_gb >= 4:
-                    return 512
+                    if vram_gb >= 16:
+                        tile_size = 2048
+                        Log.Info(f"[SoftwareOptimizer] Tile Size: {tile_size} (检测到{vram_gb:.1f}GB显存) ⚡")
+                        return tile_size
+                    elif vram_gb >= 8:
+                        return 1024
+                    elif vram_gb >= 4:
+                        return 512
 
         except Exception as e:
             Log.Debug(f"[SoftwareOptimizer] 显存检测失败: {e}")
@@ -161,6 +166,11 @@ class SoftwareOptimizer:
     def optimize_thread_priority(self, thread):
         """优化线程优先级（纯软件调度）"""
         try:
+            # 检查线程是否已启动
+            if not thread.ident:
+                Log.Debug(f"[SoftwareOptimizer] 线程 {thread.name} 未启动，跳过优先级设置")
+                return
+
             if self.system == "Windows":
                 import win32process
                 import win32api
@@ -177,8 +187,8 @@ class SoftwareOptimizer:
                         win32process.THREAD_PRIORITY_HIGHEST
                     )
                     Log.Debug(f"[SoftwareOptimizer] 线程优先级: HIGHEST ({thread.name}) ⚡")
-                except:
-                    pass
+                except Exception as e:
+                    Log.Debug(f"[SoftwareOptimizer] 设置线程优先级失败: {e}")
 
         except Exception as e:
             Log.Debug(f"[SoftwareOptimizer] 线程优先级设置失败: {e}")
@@ -222,10 +232,14 @@ class BatchProcessor:
 
         # 收集一批任务
         for _ in range(self.batch_size):
-            if not self.queue.empty():
-                task_id, data = self.queue.get()
+            try:
+                # 使用非阻塞get，避免无限等待
+                task_id, data = self.queue.get(block=False)
                 batch.append(data)
                 task_ids.append(task_id)
+            except:
+                # 队列空，停止收集
+                break
 
         if not batch:
             return
