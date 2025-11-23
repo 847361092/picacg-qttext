@@ -147,14 +147,19 @@ class SoftwareOptimizer:
                     vram_mb = int(lines[0])
                     vram_gb = vram_mb / 1024
 
-                    if vram_gb >= 16:
+                    # 修复：RTX 5070 Ti显示为15.92GB，使用>= 15阈值
+                    if vram_gb >= 15:
                         tile_size = 2048
-                        Log.Info(f"[SoftwareOptimizer] Tile Size: {tile_size} (检测到{vram_gb:.1f}GB显存) ⚡")
+                        Log.Info(f"[SoftwareOptimizer] Tile Size: {tile_size} (检测到{vram_gb:.1f}GB显存) ⚡⚡⚡")
                         return tile_size
                     elif vram_gb >= 8:
-                        return 1024
+                        tile_size = 1024
+                        Log.Info(f"[SoftwareOptimizer] Tile Size: {tile_size} (检测到{vram_gb:.1f}GB显存) ⚡⚡")
+                        return tile_size
                     elif vram_gb >= 4:
-                        return 512
+                        tile_size = 512
+                        Log.Info(f"[SoftwareOptimizer] Tile Size: {tile_size} (检测到{vram_gb:.1f}GB显存) ⚡")
+                        return tile_size
 
         except Exception as e:
             Log.Debug(f"[SoftwareOptimizer] 显存检测失败: {e}")

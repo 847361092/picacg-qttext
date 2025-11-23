@@ -45,11 +45,13 @@ class TaskWaifu2x(TaskBase):
         self.taskObj.convertBack.connect(self.HandlerTask)
 
         # 🚀 软件优化：进程调度和算法优化（不修改硬件设置）
+        Log.Info("[TaskWaifu2x] 🚀 初始化软件优化器...")
         self.sw_optimizer = get_software_optimizer()
         self.sw_optimizer.optimize_all()
 
         # 算法优化：动态Tile Size（16GB显存 → 2048）
         self.optimal_tile_size = self.sw_optimizer.get_optimal_tile_size()
+        Log.Info(f"[TaskWaifu2x] ✅ 优化Tile Size: {self.optimal_tile_size} ⚡⚡⚡")
 
         self.thread.start()
 
