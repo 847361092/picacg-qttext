@@ -11,7 +11,7 @@ from tools.log import Log
 from tools.status import Status
 from tools.str import Str
 from tools.tool import CTime, ToolUtil
-from tools.gpu_optimizer import get_gpu_optimizer  # 底层GPU优化
+from tools.software_optimizer import get_software_optimizer  # 软件层面优化
 
 
 class QConvertTask(object):
@@ -44,12 +44,12 @@ class TaskWaifu2x(TaskBase):
         TaskBase.__init__(self)
         self.taskObj.convertBack.connect(self.HandlerTask)
 
-        # 🚀 底层优化：GPU性能优化
-        self.gpu_optimizer = get_gpu_optimizer()
-        self.gpu_optimizer.optimize_all()
+        # 🚀 软件优化：进程调度和算法优化（不修改硬件设置）
+        self.sw_optimizer = get_software_optimizer()
+        self.sw_optimizer.optimize_all()
 
-        # 获取最优Tile Size（16GB显存 → 2048）
-        self.optimal_tile_size = self.gpu_optimizer.get_optimal_tile_size()
+        # 算法优化：动态Tile Size（16GB显存 → 2048）
+        self.optimal_tile_size = self.sw_optimizer.get_optimal_tile_size()
 
         self.thread.start()
 
@@ -57,8 +57,8 @@ class TaskWaifu2x(TaskBase):
         self.thread2.setName("Task-" + str("Waifu2x"))
         self.thread2.setDaemon(True)
 
-        # 🚀 底层优化：提升线程优先级
-        self.gpu_optimizer.optimize_thread_priority(self.thread2)
+        # 软件优化：提升线程优先级（纯调度优化）
+        self.sw_optimizer.optimize_thread_priority(self.thread2)
 
     def Start(self):
         self.thread2.start()
