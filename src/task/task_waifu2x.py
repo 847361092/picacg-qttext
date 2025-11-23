@@ -11,6 +11,7 @@ from tools.log import Log
 from tools.status import Status
 from tools.str import Str
 from tools.tool import CTime, ToolUtil
+from tools.gpu_optimizer import get_gpu_optimizer  # 底层GPU优化
 
 
 class QConvertTask(object):
@@ -42,11 +43,22 @@ class TaskWaifu2x(TaskBase):
     def __init__(self):
         TaskBase.__init__(self)
         self.taskObj.convertBack.connect(self.HandlerTask)
+
+        # 🚀 底层优化：GPU性能优化
+        self.gpu_optimizer = get_gpu_optimizer()
+        self.gpu_optimizer.optimize_all()
+
+        # 获取最优Tile Size（16GB显存 → 2048）
+        self.optimal_tile_size = self.gpu_optimizer.get_optimal_tile_size()
+
         self.thread.start()
 
         self.thread2 = threading.Thread(target=self.RunLoad2)
         self.thread2.setName("Task-" + str("Waifu2x"))
         self.thread2.setDaemon(True)
+
+        # 🚀 底层优化：提升线程优先级
+        self.gpu_optimizer.optimize_thread_priority(self.thread2)
 
     def Start(self):
         self.thread2.start()
@@ -108,7 +120,8 @@ class TaskWaifu2x(TaskBase):
                     from sr_vulkan import sr_vulkan as sr
                     scale = task.model.get("scale", 0)
                     mat = task.model.get("format", "")
-                    tileSize = Setting.Waifu2xTileSize.GetIndexV()
+                    # 🚀 底层优化：使用动态Tile Size（RTX 5070 Ti 16GB → 2048）
+                    tileSize = self.optimal_tile_size
                     if scale <= 0:
                         sts = sr.add(task.imgData, task.model.get('model', 0), task.taskId, task.model.get("width", 0), task.model.get("high", 0), format=mat, tileSize=tileSize)
                     else:
