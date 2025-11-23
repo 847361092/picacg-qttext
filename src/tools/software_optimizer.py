@@ -147,13 +147,14 @@ class SoftwareOptimizer:
                     vram_mb = int(lines[0])
                     vram_gb = vram_mb / 1024
 
-                    # 修复：RTX 5070 Ti显示为15.92GB，使用>= 15阈值
+                    # 使用更保守的tile size设置，避免大图片时显存溢出
+                    # 注意：_calc_tile_size会根据图片大小进一步动态调整
                     if vram_gb >= 15:
-                        tile_size = 2048
+                        tile_size = 1024  # 从2048降低到1024，大图片会进一步降低
                         Log.Info(f"[SoftwareOptimizer] Tile Size: {tile_size} (检测到{vram_gb:.1f}GB显存) ⚡⚡⚡")
                         return tile_size
                     elif vram_gb >= 8:
-                        tile_size = 1024
+                        tile_size = 768  # 从1024降低到768
                         Log.Info(f"[SoftwareOptimizer] Tile Size: {tile_size} (检测到{vram_gb:.1f}GB显存) ⚡⚡")
                         return tile_size
                     elif vram_gb >= 4:
@@ -164,9 +165,9 @@ class SoftwareOptimizer:
         except Exception as e:
             Log.Debug(f"[SoftwareOptimizer] 显存检测失败: {e}")
 
-        # 默认2048（RTX 5070 Ti）
-        Log.Info("[SoftwareOptimizer] Tile Size: 2048 (默认优化) ⚡")
-        return 2048
+        # 默认值从2048降低到1024，更安全
+        Log.Info("[SoftwareOptimizer] Tile Size: 1024 (默认优化) ⚡")
+        return 1024
 
     def optimize_thread_priority(self, thread):
         """优化线程优先级（纯软件调度）"""

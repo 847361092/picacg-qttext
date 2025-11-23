@@ -53,6 +53,9 @@ class TaskWaifu2x(TaskBase):
         self.optimal_tile_size = self.sw_optimizer.get_optimal_tile_size()
         Log.Info(f"[TaskWaifu2x] ✅ 优化Tile Size: {self.optimal_tile_size} ⚡⚡⚡")
 
+        # 允许用户覆盖Tile Size，未设置时使用自动值
+        self.base_tile_size = Setting.Waifu2xTileSize.value or self.optimal_tile_size
+
         self.thread.start()
 
         self.thread2 = threading.Thread(target=self.RunLoad2)
@@ -120,14 +123,49 @@ class TaskWaifu2x(TaskBase):
                 err = ""
                 if config.CanWaifu2x:
                     from sr_vulkan import sr_vulkan as sr
-                    scale = task.model.get("scale", 0)
+                    # 补全元数据（format/宽高），避免后续调用出现空值
+                    src_w = task.model.get("_src_w", 0)
+                    src_h = task.model.get("_src_h", 0)
                     mat = task.model.get("format", "")
-                    # 🚀 底层优化：使用动态Tile Size（RTX 5070 Ti 16GB → 2048）
-                    tileSize = self.optimal_tile_size
-                    if scale <= 0:
-                        sts = sr.add(task.imgData, task.model.get('model', 0), task.taskId, task.model.get("width", 0), task.model.get("high", 0), format=mat, tileSize=tileSize)
+                    if src_w <= 0 or src_h <= 0 or not mat:
+                        try:
+                            src_w, src_h, mat2, _ = ToolUtil.GetPictureSize(task.imgData)
+                            task.model["_src_w"] = src_w
+                            task.model["_src_h"] = src_h
+                            if not mat:
+                                mat = mat2
+                                task.model["format"] = mat
+                        except Exception as info_es:
+                            Log.Warn(f"[Waifu2x] parse meta failed: {info_es}")
+
+                    try:
+                        scale = float(task.model.get("scale", 0) or 0)
+                    except Exception:
+                        scale = 0
+                    target_w = task.model.get("width", 0)
+                    target_h = task.model.get("high", 0)
+                    # 3x黑屏修复：强制走宽高模式，减少tileSize防止显存溢出
+                    use_scale = scale
+                    if scale >= 2.9:
+                        if src_w and src_h:
+                            target_w = int(src_w * scale)
+                            target_h = int(src_h * scale)
+                            task.model["width"] = target_w
+                            task.model["high"] = target_h
+                        use_scale = 0
+                    if use_scale <= 0 and (not target_w or not target_h):
+                        # 没有宽高信息时退回倍率模式，避免传入0导致任务失败
+                        use_scale = scale
+                        target_w = target_w or src_w
+                        target_h = target_h or src_h
+
+                    tileSize = self._calc_tile_size(use_scale, target_w, target_h)
+                    mat = mat or "png"
+
+                    if use_scale <= 0:
+                        sts = sr.add(task.imgData, task.model.get("model", 0), task.taskId, target_w, target_h, format=mat, tileSize=tileSize)
                     else:
-                        sts = sr.add(task.imgData, task.model.get('model', 0), task.taskId, scale, format=mat, tileSize=tileSize)
+                        sts = sr.add(task.imgData, task.model.get("model", 0), task.taskId, use_scale, format=mat, tileSize=tileSize)
 
                     if sts <= 0:
                         err = sr.getLastError()
@@ -145,6 +183,37 @@ class TaskWaifu2x(TaskBase):
                 task.status = Status.PathError
                 self.taskObj.convertBack.emit(taskId)
                 continue
+
+    def _calc_tile_size(self, scale, target_w, target_h):
+        """
+        根据倍率和目标尺寸动态调整tile size：
+        - 根据目标图片大小动态降低tile size，避免显存溢出导致黑屏
+        - 使用更激进的策略防止vkAllocateMemory失败
+        - 保底200，避免传0
+        """
+        tile_size = self.base_tile_size if self.base_tile_size else self.optimal_tile_size
+        try:
+            max_side = max(target_w or 0, target_h or 0)
+            # 更激进的降级策略，防止显存溢出
+            if max_side >= 6000:
+                # 6000x4000+: 使用极小tile size防止16GB显存溢出
+                tile_size = min(tile_size, 256)
+                Log.Info(f"[Waifu2x] 超大图片检测: {target_w}x{target_h}, 降低tile_size至{tile_size}防止显存溢出")
+            elif max_side >= 5000:
+                # 5000x3000+: 使用小tile size
+                tile_size = min(tile_size, 400)
+                Log.Info(f"[Waifu2x] 大图片检测: {target_w}x{target_h}, 降低tile_size至{tile_size}")
+            elif max_side >= 4000:
+                # 4000x3000+: 使用中等tile size
+                tile_size = min(tile_size, 512)
+            elif scale >= 2.9:
+                # 3x放大也要降低
+                tile_size = min(tile_size, 768)
+
+            Log.Debug(f"[Waifu2x] calc tile size: scale={scale}, target={target_w}x{target_h}, max_side={max_side}, tile_size={tile_size}")
+        except Exception as es:
+            Log.Debug(f"[Waifu2x] calc tile size failed: {es}")
+        return max(tile_size, 200)
 
     def LoadData(self):
         if not config.CanWaifu2x:
